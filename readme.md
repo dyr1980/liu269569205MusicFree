@@ -2,7 +2,7 @@
 
 **中文** 
 
-该项目基于https://github.com/maotoumao/MusicFree 二开
+该项目基于https://github.com/maotoumao/MusicFree   dev分支 二开
 
 优化功能
 1. 点击播放列表立即下载到 设置中的下载目录，歌单列表会优先查找下载目录中文件名包含 "歌曲名@作者"，防止插件源失效导致歌曲失效
@@ -26,5 +26,7 @@
 
 
 
+### 已编译好的文arm64文件
 
+在   .img/app-arm64-v8a-release.apk
 
