@@ -20,9 +20,9 @@
 
 #### 截图
 
-<img src="./.imgs/1.jpg" width="320px" alt="主界面">
-<img src="./.imgs/2.jpg" width="320px" alt="主界面">
-<img src="./.imgs/2.jpg" width="320px" alt="主界面">
+<img src="./.img/1.jpg" width="320px" alt="主界面">
+<img src="./.img/2.jpg" width="320px" alt="主界面">
+<img src="./.img/2.jpg" width="320px" alt="主界面">
 
 
 
