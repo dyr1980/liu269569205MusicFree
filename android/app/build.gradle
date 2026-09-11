@@ -148,9 +148,11 @@ android {
                 reset()
                 enable true
                 universalApk true
-                // 正式发布：为所有架构生成 APK，覆盖 32 位与 64 位设备
-                // 调试阶段可临时启用下面一行加速构建
-                // include "arm64-v8a"
+                // 为每个架构单独生成 APK，并额外生成 universal 通用版
+                // 输出：app-armeabi-v7a-release.apk / app-arm64-v8a-release.apk /
+                //      app-x86-release.apk / app-x86_64-release.apk /
+                //      app-universal-release.apk
+                include "armeabi-v7a", "arm64-v8a", "x86", "x86_64"
             }
     }
 
