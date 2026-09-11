@@ -1,11 +1,11 @@
 {
   "name": "MusicFree",
-  "version": "0.6.3-beta.1",
+  "version": "1.0.0",
   "private": true,
   "license": "AGPL",
   "author": {
-    "name": "猫头猫",
-    "email": "lhx_xjtu@163.com"
+    "name": "小橙子",
+    "email": "365596078@qq.com"
   },
   "scripts": {
     "android": "react-native run-android",
