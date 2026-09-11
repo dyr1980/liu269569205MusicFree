@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { FlatList, StyleSheet, View } from "react-native";
+import { FlatList, StyleSheet, Text, View } from "react-native";
 import rpx from "@/utils/rpx";
 import * as DocumentPicker from "expo-document-picker";
 import Loading from "@/components/base/loading";
@@ -33,6 +33,7 @@ export default function PluginList() {
     const { t } = useI18N();
 
     const [loading, setLoading] = useState(false);
+    const [progressText, setProgressText] = useState("");
 
     const navigator = useNavigation<any>();
 
@@ -112,7 +113,10 @@ export default function PluginList() {
                 setLoading(true);
                 closePanel();
 
-                const result = await installPluginFromUrl(text.trim());
+                setProgressText("正在解析订阅...");
+                const result = await installPluginFromUrl(text.trim(), (cur, total) => {
+                    setProgressText(`正在安装插件 ${cur}/${total}`);
+                });
 
                 // 检查是否全部安装成功
                 const successResults: IInstallPluginResult[] = [];
@@ -144,7 +148,7 @@ export default function PluginList() {
                     });
                 }
 
-
+                setProgressText("");
                 setLoading(false);
             },
         });
@@ -164,7 +168,10 @@ export default function PluginList() {
             const urlItems = JSON.parse(urls!);
             if (Array.isArray(urlItems)) {
                 for (let i = 0; i < urlItems.length; ++i) {
-                    const result = await installPluginFromUrl(urlItems[i].url);
+                    setProgressText(`正在处理订阅 ${i + 1}/${urlItems.length}`);
+                    const result = await installPluginFromUrl(urlItems[i].url, (cur, total) => {
+                        setProgressText(`订阅 ${i + 1}/${urlItems.length} - 插件 ${cur}/${total}`);
+                    });
                     if (result[0]) {
                         if (result[0].success) {
                             successResults.push(result[0]);
@@ -198,7 +205,10 @@ export default function PluginList() {
 
         } catch {
             if (urls?.length) {
-                const result = await installPluginFromUrl(urls);
+                setProgressText("正在安装插件...");
+                const result = await installPluginFromUrl(urls, (cur, total) => {
+                    setProgressText(`正在安装插件 ${cur}/${total}`);
+                });
                 if (result[0]) {
                     if (result[0].success) {
                         Toast.success(t("toast.installPluginSuccess"));
@@ -212,6 +222,7 @@ export default function PluginList() {
                 }
             }
         }
+        setProgressText("");
         setLoading(false);
     }
 
@@ -226,6 +237,7 @@ export default function PluginList() {
             for (let i = 0; i < plugins.length; ++i) {
                 const srcUrl = plugins[i].instance.srcUrl;
                 if (srcUrl) {
+                    setProgressText(`正在更新插件 ${i + 1}/${plugins.length}`);
                     const result = await installPluginFromUrl(srcUrl);
                     if (result[0]) {
                         if (result[0].success) {
@@ -261,6 +273,7 @@ export default function PluginList() {
                 reason: e?.message ?? e,
             }));
         }
+        setProgressText("");
         setLoading(false);
     }
 
@@ -270,7 +283,12 @@ export default function PluginList() {
             <HorizontalSafeAreaView style={style.wrapper}>
                 <>
                     {loading ? (
-                        <Loading />
+                        <View style={style.loadingWrapper}>
+                            <Loading />
+                            {progressText ? (
+                                <Text style={style.progressText}>{progressText}</Text>
+                            ) : null}
+                        </View>
                     ) : (
                         <FlatList
                             ListEmptyComponent={Empty}
@@ -333,6 +351,18 @@ const style = StyleSheet.create({
         width: "100%",
         flex: 1,
     },
+    loadingWrapper: {
+        flex: 1,
+        width: "100%",
+        justifyContent: "center",
+        alignItems: "center",
+    },
+    progressText: {
+        marginTop: rpx(24),
+        fontSize: rpx(28),
+        opacity: 0.7,
+        textAlign: "center",
+    },
     blank: {
         height: rpx(200),
     },
@@ -340,13 +370,17 @@ const style = StyleSheet.create({
 
 
 
-async function installPluginFromUrl(text: string): Promise<IInstallPluginResult[]> {
+async function installPluginFromUrl(
+    text: string,
+    onProgress?: (current: number, total: number) => void,
+): Promise<IInstallPluginResult[]> {
     try {
         let urls: string[] = [];
         const inputUrl = text.trim();
         if (text.endsWith(".json")) {
             const jsonFile = (
                 await axios.get(inputUrl, {
+                    timeout: 20000,
                     headers: {
                         "Cache-Control": "no-cache",
                         Pragma: "no-cache",
@@ -354,27 +388,113 @@ async function installPluginFromUrl(text: string): Promise<IInstallPluginResult[
                     },
                 })
             ).data;
-            /**
-             * {
-             *     plugins: [{
-             *          version: xxx,
-             *          url: xxx
-             *      }]
-             * }
-             */
             urls = (jsonFile?.plugins ?? []).map((_: any) => _.url);
         } else {
             urls = [inputUrl];
         }
-        return await Promise.all(
-            urls.map(url =>
-                PluginManager.installPluginFromUrl(url, {
-                    notCheckVersion: Config.getConfig(
-                        "basic.notCheckPluginVersion",
+
+        const results: IInstallPluginResult[] = [];
+
+        // ---------- 单个插件的下载逻辑 ----------
+        // 15 秒硬超时，和电视源常见的超时设置对齐
+        // 国内访问 GitHub/jsdelivr 的慢响应一般 8~12 秒，15 秒能兜住
+        // 若某个源卡死，最多拖 15 秒，不会影响同批其他源
+        const SINGLE_TIMEOUT = 15000;
+
+        const downloadOne = async (url: string): Promise<IInstallPluginResult> => {
+            try {
+                return await Promise.race([
+                    PluginManager.installPluginFromUrl(url, {
+                        notCheckVersion: Config.getConfig(
+                            "basic.notCheckPluginVersion",
+                        ),
+                    }),
+                    new Promise<IInstallPluginResult>(resolve =>
+                        setTimeout(
+                            () =>
+                                resolve({
+                                    success: false,
+                                    message: "请求超时（15秒）",
+                                    pluginUrl: url,
+                                }),
+                            SINGLE_TIMEOUT,
+                        ),
                     ),
-                }),
-            ),
-        );
+                ]);
+            } catch (e: any) {
+                return {
+                    success: false,
+                    message: e?.message ?? String(e),
+                    pluginUrl: url,
+                };
+            }
+        };
+
+        // ---------- 第一阶段：分组并发下载 ----------
+        const BATCH_SIZE = 4;       // 每批同时下载 4 个
+        const BATCH_DELAY = 500;    // 每批之间歇 500ms
+
+        const failedUrls: string[] = [];
+        let completed = 0;
+
+        for (let i = 0; i < urls.length; i += BATCH_SIZE) {
+            const batch = urls.slice(i, i + BATCH_SIZE);
+            // downloadOne 内部已捕获所有异常并加 15 秒硬超时，
+            // Promise.all 永远不会 reject，个别源失败不会影响同批其他源
+            const batchResults = await Promise.all(batch.map(downloadOne));
+
+            for (let j = 0; j < batchResults.length; j++) {
+                if (batchResults[j].success) {
+                    results.push(batchResults[j]);
+                } else {
+                    failedUrls.push(batch[j]);
+                }
+                completed++;
+            }
+
+            // 更新进度
+            if (onProgress) {
+                onProgress(completed, urls.length);
+            }
+
+            // 最后一批不用等
+            if (i + BATCH_SIZE < urls.length) {
+                await new Promise(resolve => setTimeout(resolve, BATCH_DELAY));
+            }
+        }
+
+        // ---------- 第二阶段：对失败的集中重试（3 轮，递增延时） ----------
+        const RETRY_DELAYS = [1000, 2000, 3000];
+
+        let stillFailed = [...failedUrls];
+
+        for (let round = 0; round < RETRY_DELAYS.length; round++) {
+            if (stillFailed.length === 0) break;
+
+            const nextRound: string[] = [];
+            for (const url of stillFailed) {
+                await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[round]));
+                const r = await downloadOne(url);
+                if (r.success) {
+                    results.push(r);
+                } else {
+                    nextRound.push(url);
+                }
+            }
+            stillFailed = nextRound;
+        }
+
+        // ---------- 第三阶段：最终失败的作为结果返回 ----------
+        // 这些失败不会影响前面已成功导入的插件，只是作为列表返回给 UI
+        for (const url of stillFailed) {
+            results.push({
+                success: false,
+                message: "网络超时，多次重试仍失败（该源可能已失效）",
+                pluginUrl: url,
+            });
+        }
+
+        return results;
     } catch (e: any) {
         return [{ success: false, message: e?.message, pluginUrl: text }];
     }
