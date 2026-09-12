@@ -25,8 +25,7 @@ export const checkUpdateAndShowResult = (
             showDialog("DownloadDialog", {
                 version: data.version,
                 content: data.changeLog,
-                fromUrl: data.download[0],
-                backUrl: data.download[1],
+                downloadUrls: data.download,
             });
         } else {
             if (showToast) {
