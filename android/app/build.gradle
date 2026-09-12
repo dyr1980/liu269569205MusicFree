@@ -111,7 +111,7 @@ static def getVersion() {
 def appVersion = getVersion()
 // 每次发新版请手动 +1，避免与已发布版本冲突
 // 上一次是 400011，本次改为 400012
-def appVersionCode = 400012
+def appVersionCode = 400013
 
 
 android {
