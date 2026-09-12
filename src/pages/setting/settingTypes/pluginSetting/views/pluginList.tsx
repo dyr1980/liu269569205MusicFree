@@ -136,35 +136,78 @@ export default function PluginList() {
             return;
         }
         setLoading(true);
+        cancelRef.current = false;
 
         const allResults: IInstallPluginResult[] = [];
-        cancelRef.current = false;
+        let removedCount = 0;
 
         try {
             const urlItems = JSON.parse(urls!);
-            if (Array.isArray(urlItems)) {
-                for (let i = 0; i < urlItems.length; ++i) {
-                    if (cancelRef.current) break;
-                    setProgressText(`正在处理订阅 ${i + 1}/${urlItems.length}`);
-                    const result = await installPluginFromUrl(
-                        urlItems[i].url,
-                        txt => setProgressText(`订阅 ${i + 1}/${urlItems.length} · ${txt}`),
-                        () => cancelRef.current,
-                    );
-                    allResults.push(...result);
+            if (!Array.isArray(urlItems)) throw new Error();
+
+            // 读取上次同步时每个订阅包含的插件 URL
+            const previousState = getSubscriptionState();
+            const newState: Record<string, string[]> = {};
+            const remoteUrlSet = new Set<string>();
+
+            // ========== 阶段 1：每次点击都重新拉取所有订阅 ==========
+            for (let i = 0; i < urlItems.length; ++i) {
+                if (cancelRef.current) break;
+                const subUrl = urlItems[i].url;
+                setProgressText(`正在获取订阅 ${i + 1}/${urlItems.length}`);
+
+                try {
+                    const remoteUrls = await fetchSubscriptionPluginUrls(subUrl);
+                    newState[subUrl] = remoteUrls;
+                    remoteUrls.forEach(u => remoteUrlSet.add(u));
+                } catch (e: any) {
+                    // 拉取失败：保留上次记录，避免误删该订阅下的插件
+                    const keep = previousState[subUrl] ?? [];
+                    newState[subUrl] = keep;
+                    keep.forEach(u => remoteUrlSet.add(u));
+                    trace("订阅拉取失败", subUrl, e?.message);
                 }
-            } else {
-                throw new Error();
             }
 
-            // 解决遗漏点 2 & 3
-            if (allResults.length === 0) {
-                Toast.warn(t("toast.subscriptionInvalid"));
-            } else {
+            // ========== 阶段 2：安装 / 更新订阅里的所有插件 ==========
+            const remoteList = Array.from(remoteUrlSet);
+            for (let i = 0; i < remoteList.length; ++i) {
+                if (cancelRef.current) break;
+                setProgressText(`正在安装插件 ${i + 1}/${remoteList.length}`);
+                const r = await installOnePluginByUrl(remoteList[i]);
+                allResults.push(r);
+            }
+
+            // ========== 阶段 3：删除"上次来自订阅、这次不在订阅里"的插件 ==========
+            const previousAllUrls = new Set<string>();
+            for (const subUrl of Object.keys(previousState)) {
+                (previousState[subUrl] ?? []).forEach(u => previousAllUrls.add(u));
+            }
+            const toRemove = Array.from(previousAllUrls).filter(
+                u => !remoteUrlSet.has(u),
+            );
+
+            for (let i = 0; i < toRemove.length; ++i) {
+                if (cancelRef.current) break;
+                setProgressText(`正在移除失效插件 ${i + 1}/${toRemove.length}`);
+                const ok = await uninstallPluginBySrcUrl(toRemove[i]);
+                if (ok) removedCount++;
+            }
+
+            // ========== 阶段 4：保存新的订阅状态 ==========
+            setSubscriptionState(newState);
+
+            // ========== 结果提示 ==========
+            if (allResults.length > 0) {
                 showInstallSummary(allResults);
+            } else if (toRemove.length === 0) {
+                Toast.warn(t("toast.subscriptionInvalid"));
+            } else if (removedCount > 0) {
+                Toast.success(`已移除 ${removedCount} 个失效插件`);
             }
 
         } catch {
+            // 兼容旧的单 URL 情况
             if (urls?.length) {
                 setProgressText("正在安装插件...");
                 const result = await installPluginFromUrl(
@@ -566,4 +609,102 @@ async function installPluginFromUrl(
     } catch (e: any) {
         return [{ success: false, message: e?.message, pluginUrl: text }];
     }
+}
+
+// ==================== 订阅同步辅助 ====================
+
+/**
+ * 读取上次同步的订阅状态：
+ * { [订阅URL]: [该订阅上次包含的插件URL...] }
+ */
+function getSubscriptionState(): Record<string, string[]> {
+    try {
+        const raw: any = Config.getConfig("plugin.subscribeState" as any);
+        if (!raw) return {};
+        // 兼容可能的"字符串套字符串"旧数据
+        if (typeof raw === "string") {
+            try { return JSON.parse(raw); } catch { return {}; }
+        }
+        return raw;
+    } catch {
+        return {};
+    }
+}
+
+/** 保存订阅状态 */
+function setSubscriptionState(state: Record<string, string[]>) {
+    try {
+        // Config.setConfig 内部已做 safeStringify，直接传对象即可
+        Config.setConfig("plugin.subscribeState" as any, state as any);
+    } catch (e: any) {
+        trace("保存订阅状态失败", e?.message);
+    }
+}
+
+/** 拉取订阅 JSON，返回其中所有插件 URL（已去重、已过滤空值） */
+async function fetchSubscriptionPluginUrls(subUrl: string): Promise<string[]> {
+    const jsonFile = (
+        await axios.get(subUrl, {
+            timeout: 20000,
+            headers: {
+                "Cache-Control": "no-cache",
+                Pragma: "no-cache",
+                Expires: "0",
+            },
+        })
+    ).data;
+    const urls: string[] = (jsonFile?.plugins ?? [])
+        .map((_: any) => _.url)
+        .filter((u: any) => u && String(u).trim());
+    return Array.from(new Set(urls));
+}
+
+/** 安装单个插件 URL（带 15 秒超时保护） */
+async function installOnePluginByUrl(url: string): Promise<IInstallPluginResult> {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    try {
+        const timeoutPromise = new Promise<IInstallPluginResult>(resolve => {
+            timer = setTimeout(() => {
+                resolve({
+                    success: false,
+                    message: "请求超时（15秒）",
+                    pluginUrl: url,
+                });
+            }, 15000);
+        });
+        return await Promise.race([
+            PluginManager.installPluginFromUrl(url, {
+                notCheckVersion: Config.getConfig("basic.notCheckPluginVersion"),
+            }),
+            timeoutPromise,
+        ]);
+    } catch (e: any) {
+        return {
+            success: false,
+            message: e?.message ?? String(e),
+            pluginUrl: url,
+        };
+    } finally {
+        if (timer) {
+            clearTimeout(timer);
+            timer = null;
+        }
+    }
+}
+
+/** 通过 srcUrl 找到已安装的插件并卸载（含已禁用插件） */
+async function uninstallPluginBySrcUrl(srcUrl: string): Promise<boolean> {
+    try {
+        // 用 getSortedPlugins() 而不是 getEnabledPlugins()，
+        // 因为被禁用的插件也要能被找到并卸载
+        const plugins = PluginManager.getSortedPlugins();
+        const target = plugins.find(p => p.instance?.srcUrl === srcUrl);
+        if (target) {
+            await PluginManager.uninstallPlugin(target.hash);
+            return true;
+        }
+    } catch (e: any) {
+        trace("卸载插件失败", srcUrl, e?.message);
+    }
+    return false;
 }
