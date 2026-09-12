@@ -3,10 +3,10 @@ import { compare } from "compare-versions";
 import DeviceInfo from "react-native-device-info";
 
 const updateList = [
-    "https://gitee.com/maotoumao/MusicFree/raw/master/release/version.json",
-    "https://raw.gitcode.com/maotoumao/MusicFree/raw/master/release/version.json",
-    "https://raw.githubusercontent.com/maotoumao/MusicFree/master/release/version.json",
-    "https://cdn.jsdelivr.net/gh/maotoumao/MusicFree@master/release/version.json",
+    "https://raw.githubusercontent.com/dyr1980/liu269569205MusicFree/main/release/version.json",
+    "https://cdn.jsdelivr.net/gh/dyr1980/liu269569205MusicFree@main/release/version.json",
+    "https://gh-proxy.com/https://raw.githubusercontent.com/dyr1980/liu269569205MusicFree/main/release/version.json",
+    "https://ghproxy.net/https://raw.githubusercontent.com/dyr1980/liu269569205MusicFree/main/release/version.json",
 ];
 
 interface IUpdateInfo {
