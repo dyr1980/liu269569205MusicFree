@@ -52,7 +52,6 @@ jobs:
           import re
 
           def replace_repos(text):
-              # 把所有 google() / mavenCentral() / gradlePluginPortal() 替换为阿里云镜像
               text = text.replace("google()", "maven { url 'https://maven.aliyun.com/repository/google' }")
               text = text.replace("mavenCentral()", "maven { url 'https://maven.aliyun.com/repository/public' }")
               text = text.replace("gradlePluginPortal()", "maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }")
@@ -112,5 +111,43 @@ jobs:
           draft: false
           prerelease: false
           files: android/app/build/outputs/apk/release/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update version.json
+        if: success()
+        run: |
+          TAG="v${{ github.run_number }}"
+          APP_VERSION=$(node -p "require('./package.json').version")
+
+          mkdir -p release
+          cat > release/version.json << EOF
+          {
+            "version": "${APP_VERSION}",
+            "changeLog": [
+              "【新增】订阅同步功能，支持自动同步在线订阅的新增、修改、删除",
+              "【优化】App 内下载升级，不再跳浏览器，多源自动切换"
+            ],
+            "download": [
+              "https://gh.monlor.com/https://github.com/dyr1980/liu269569205MusicFree/releases/download/${TAG}/app-arm64-v8a-release.apk",
+              "https://github.chenc.dev/https://github.com/dyr1980/liu269569205MusicFree/releases/download/${TAG}/app-arm64-v8a-release.apk",
+              "https://gh.acmsz.top/https://github.com/dyr1980/liu269569205MusicFree/releases/download/${TAG}/app-arm64-v8a-release.apk",
+              "https://ghfast.top/https://github.com/dyr1980/liu269569205MusicFree/releases/download/${TAG}/app-arm64-v8a-release.apk",
+              "https://github.com/dyr1980/liu269569205MusicFree/releases/download/${TAG}/app-arm64-v8a-release.apk"
+            ]
+          }
+          EOF
+
+          echo "✅ Generated version.json:"
+          cat release/version.json
+
+      - name: Commit version.json
+        if: success()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add release/version.json
+          git commit -m "chore: auto-update version.json for v${{ github.run_number }}" || echo "No changes to commit"
+          git push
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
